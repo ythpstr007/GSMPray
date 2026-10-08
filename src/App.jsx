@@ -559,8 +559,6 @@ export default function App() {
 
 function AppMain({ settings }) {
   const ADMIN_PASSWORD = settings.password;
-  const MINISTRY_NAME = settings.name;
-  const MINISTRY_SUB = settings.sub || "";
 
   const [people, setPeople] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1124,10 +1122,6 @@ function AppMain({ settings }) {
       <header style={S.header}>
         <div style={S.logoWrap}>
           <img src="/gsm-logo.png" alt="Grace Student Ministry — Know, Own, Known" style={S.logoImage} />
-          <div style={S.ministryLabel}>
-            <span style={S.logoText}>{MINISTRY_NAME}</span>
-            {MINISTRY_SUB && <span style={S.logoSub}>{MINISTRY_SUB}</span>}
-          </div>
         </div>
         <div style={{ ...S.weekBar, cursor: "pointer" }} onClick={() => setView("week")}>
           <Heart size={13} color={C.accent} fill={C.accent} />
@@ -1894,14 +1888,10 @@ const C = {
 
 /* ── Styles ─────────────────────────────────────────────── */
 const S = {
-  root: { minHeight: "100vh", background: C.bg, color: C.cream, fontFamily: "'Inter', system-ui, sans-serif", fontSize: 14, maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column" },
-  header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 20px 0", gap: 12, flexWrap: "wrap" },
-  logoWrap: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, minWidth: 0, flex: 1 },
+  root: { minHeight: "100svh", boxSizing: "border-box", paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "env(safe-area-inset-bottom, 0px)", background: C.bg, color: C.cream, fontFamily: "'Inter', system-ui, sans-serif", fontSize: 14, maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column" },
+  header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "24px 20px 0", gap: 12, flexWrap: "wrap" },
+  logoWrap: { display: "flex", alignItems: "center", minWidth: 140, flex: 1 },
   logoImage: { display: "block", width: 184, maxWidth: "100%", height: "auto" },
-  ministryLabel: { display: "flex", flexDirection: "column", gap: 4, lineHeight: 1.3 },
-  logoSub: { fontSize: 12, color: C.muted },
-  logoCross: { fontSize: 18, color: C.accent },
-  logoText: { fontFamily: "'Lora', Georgia, serif", fontSize: 16, fontWeight: 600, color: C.cream, letterSpacing: "0.01em" },
   weekBar: { display: "flex", alignItems: "center", gap: 6, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: "5px 12px" },
   weekText: { fontSize: 12, color: C.muted },
   bdayAlert: { fontSize: 11, background: C.faint, color: C.accent, borderRadius: 10, padding: "2px 7px 2px 6px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 3, verticalAlign: "middle" },
