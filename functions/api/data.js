@@ -1,96 +1,66 @@
+import { json, readJson } from '../../shared/security.js';
+const leaderFields = new Set(['prayedAt', 'prayedWeek', 'prayedWeekDate', 'prayCount', 'weekPrayCount', 'prayerRequests', 'updatedAt']);
+function validPeople(people) {
+  if (!Array.isArray(people) || people.length === 0 || people.length > 2000) return false;
+  const ids = new Set();
+  return people.every(p => {
+    if (!p || typeof p !== 'object' || Array.isArray(p) || typeof p.id !== 'string' || p.id.length > 128 || ids.has(p.id) || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 200) return false;
+    ids.add(p.id);
+    for (const k of ['updatedAt', 'prayedAt', 'prayedWeek', 'prayCount', 'weekPrayCount']) if (p[k] != null && (!Number.isFinite(p[k]) || p[k] < 0)) return false;
+    for (const k of ['updatedAt', 'prayedAt', 'prayedWeek']) if (p[k] != null && p[k] > Date.now() + 60000) return false;
+    if (p.prayedWeekDate != null && (typeof p.prayedWeekDate !== 'string' || p.prayedWeekDate.length > 32)) return false;
+    if (p.prayerRequests != null && (!Array.isArray(p.prayerRequests) || p.prayerRequests.length > 100 || p.prayerRequests.some(s => typeof s !== 'string' || s.length > 4000))) return false;
+    return true;
+  });
+}
 export async function onRequest(context) {
-  const { request, env } = context;
-
-  const headers = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Cache-Control": "no-store, no-cache, must-revalidate",
-  };
-
-  if (request.method === "OPTIONS") return new Response(null, { headers });
-
-  if (!env.INTERCEDE_KV) {
-    return new Response(JSON.stringify({ error: "KV namespace not bound" }), { status: 500, headers });
+  const { request, env, data } = context;
+  if (!data.user) return json({ error: 'Sign in required' }, 401);
+  if (!env.INTERCEDE_KV) return json({ error: 'Storage unavailable' }, 503);
+  const key = new URL(request.url).searchParams.get('key') || 'people';
+  if (!['people', 'settings'].includes(key)) return json({ error: 'Unknown resource' }, 400);
+  if (key === 'settings') {
+    if (request.method !== 'GET') return json({ error: 'Settings changes are disabled' }, 403);
+    const raw = await env.INTERCEDE_KV.get('settings');
+    const s = raw ? JSON.parse(raw) : {};
+    // Never expose credentials or allow unauthenticated setup/reset.
+    return json({ name: typeof s.name === 'string' ? s.name : 'Grace Student Ministry', sub: typeof s.sub === 'string' ? s.sub : '' });
   }
-
-  const url = new URL(request.url);
-  const key = url.searchParams.get("key") || "people";
-
-  // Settings endpoint
-  if (key === "settings") {
-    if (request.method === "GET") {
-      const data = await env.INTERCEDE_KV.get("settings");
-      return new Response(data || "null", { headers });
-    }
-    if (request.method === "POST") {
-      const body = await request.text();
-      try {
-        const parsed = JSON.parse(body);
-        await env.INTERCEDE_KV.put("settings", JSON.stringify(parsed));
-        return new Response(JSON.stringify({ ok: true }), { headers });
-      } catch (_e) {
-        return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers });
-      }
+  if (request.method === 'GET') return json(JSON.parse(await env.INTERCEDE_KV.get('people') || '[]'));
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  let incoming, force;
+  try {
+    const parsed = await readJson(request);
+    incoming = Array.isArray(parsed) ? parsed : parsed?.data;
+    force = !Array.isArray(parsed) && parsed?.force === true;
+    if (!validPeople(incoming)) throw new Error('Invalid roster');
+  } catch { return json({ error: 'Invalid or oversized roster' }, 400); }
+  if (force && !data.user.isAdmin) return json({ error: 'Admin access required' }, 403);
+  const stored = JSON.parse(await env.INTERCEDE_KV.get('people') || '[]');
+  if (!Array.isArray(stored)) return json({ error: 'Storage needs administrator attention' }, 503);
+  const storedMap = new Map(stored.map(p => [p.id, p]));
+  if (!data.user.isAdmin) {
+    // Only mutable prayer fields may change. Never trust a client-side admin flag.
+    for (const p of incoming) {
+      const old = storedMap.get(p.id);
+      if (!old) return json({ error: 'Admin access required to add people' }, 403);
+      const protectedKeys = new Set([...Object.keys(old), ...Object.keys(p)].filter(k => !leaderFields.has(k)));
+      for (const k of protectedKeys) if (JSON.stringify(old[k]) !== JSON.stringify(p[k])) return json({ error: 'Admin access required to edit student details' }, 403);
     }
   }
-
-  // People endpoint (default)
-  if (request.method === "GET") {
-    const data = await env.INTERCEDE_KV.get("people");
-    return new Response(data || "[]", { headers });
-  }
-
-  if (request.method === "POST") {
-    const body = await request.text();
-    let incoming, force;
-    try {
-      const parsed = JSON.parse(body);
-      if (Array.isArray(parsed)) {
-        incoming = parsed;
-        force = false;
-      } else {
-        incoming = parsed.data;
-        force = parsed.force === true;
-      }
-      if (!Array.isArray(incoming)) throw new Error("not array");
-    } catch (_e) {
-      return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers });
-    }
-
-    if (incoming.length === 0) {
-      return new Response(JSON.stringify({ error: "Refusing to store empty data" }), { status: 400, headers });
-    }
-
-    if (force) {
-      await env.INTERCEDE_KV.put("people", JSON.stringify(incoming));
-      return new Response(JSON.stringify({ ok: true, count: incoming.length, forced: true }), { headers });
-    }
-
-    let stored = [];
-    try {
-      const raw = await env.INTERCEDE_KV.get("people");
-      if (raw) stored = JSON.parse(raw);
-      if (!Array.isArray(stored)) stored = [];
-    } catch (_e) { stored = []; }
-
-    const storedMap = Object.fromEntries(stored.map(p => [p.id, p]));
+  const merged = incoming.map(p => {
+    const old = storedMap.get(p.id);
+    if (!old) return p;
+    if ((p.updatedAt || 0) < (old.updatedAt || 0)) return old;
+    if (data.user.isAdmin) return p;
+    const result = { ...old };
+    for (const k of leaderFields) if (Object.hasOwn(p, k)) result[k] = p[k];
+    return result;
+  });
+  if (!force) {
     const incomingIds = new Set(incoming.map(p => p.id));
-
-    const merged = incoming.map(p => {
-      const s = storedMap[p.id];
-      if (!s) return p;
-      return (p.updatedAt || 0) >= (s.updatedAt || 0) ? p : s;
-    });
-
-    for (const s of stored) {
-      if (!incomingIds.has(s.id)) merged.push(s);
-    }
-
-    await env.INTERCEDE_KV.put("people", JSON.stringify(merged));
-    return new Response(JSON.stringify({ ok: true, count: merged.length }), { headers });
+    for (const p of stored) if (!incomingIds.has(p.id)) merged.push(p);
   }
-
-  return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers });
+  await env.INTERCEDE_KV.put('people', JSON.stringify(merged));
+  return json({ ok: true, count: merged.length });
 }
