@@ -1,4 +1,6 @@
-# Let's Pray
+# GSM Pray
+
+> **Private-access version:** Read [SECURITY_SETUP.md](SECURITY_SETUP.md) before deployment. Server-side Cloudflare Access authentication and approved-email configuration are required. The old shared admin password and public-access setup instructions below are historical and do not apply to this version.
 
 A free, open-source prayer tool for youth ministry leaders. Built to help your team pray intentionally and consistently for every student and leader in your group.
 

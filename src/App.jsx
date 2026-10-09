@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ChevronLeft, ChevronRight, Heart, Plus, Trash2, Upload, X, RefreshCw, BookOpen, RotateCcw, Cake, BarChart2, Bell, Star, Lightbulb } from "lucide-react";
 
-const STORAGE_KEY = "intercede-people-v2";
-// Settings loaded from KV on startup
-const SETUP_KEY = "letspray-setup"; // legacy local fallback
 
 const TAP_KEY = "intercede-tap-ts";
 const TAP_TTL = 24 * 60 * 60 * 1000;
@@ -30,39 +27,36 @@ function dismissBday(personId) {
 function recordTapShown() {
   try { localStorage.setItem(TAP_KEY, String(Date.now())); } catch (_e) {}
 }
-const ADMIN_KEY = "intercede-admin-authed";
-const ADMIN_TTL = 86400000;
-
-function isAdminAuthed() {
-  try {
-    const raw = localStorage.getItem(ADMIN_KEY);
-    if (!raw) return false;
-    const { ts } = JSON.parse(raw);
-    return Date.now() - ts < ADMIN_TTL;
-  } catch (_e) { return false; }
+function clearLegacyPrivateData() {
+  for (const key of ["intercede-people-v2", "letspray-setup", "intercede-admin-authed"]) {
+    try { localStorage.removeItem(key); } catch (_e) {}
+  }
 }
-
-function setAdminAuthed() {
-  localStorage.setItem(ADMIN_KEY, JSON.stringify({ ts: Date.now() }));
+async function privateFetch(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(path, { ...options, credentials: "same-origin", cache: "no-store", redirect: "error", headers: { ...options.headers, "X-GSM-Request": "1" } });
+  } catch (_e) {
+    if (options.method === "POST") window.dispatchEvent(new Event("gsm-save-failed"));
+    throw new Error("Connection unavailable. Changes have not been saved.");
+  }
+  if (res.status === 401 || res.status === 403) {
+    window.dispatchEvent(new Event("gsm-access-expired"));
+    throw new Error("Sign-in required or permission denied.");
+  }
+  if (!res.ok) {
+    if (options.method === "POST") window.dispatchEvent(new Event("gsm-save-failed"));
+    throw new Error("Unable to save or load data. Please retry.");
+  }
+  return res;
 }
 async function apiLoadSettings() {
-  try {
-    const res = await fetch("/api/data?key=settings");
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (_e) { return null; }
-}
-
-async function apiSaveSettings(settings) {
-  await fetch("/api/data?key=settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
+  const res = await privateFetch("/api/data?key=settings");
+  return await res.json();
 }
 
 async function apiLoad() {
-  const res = await fetch("/api/data");
+  const res = await privateFetch("/api/data");
   if (!res.ok) throw new Error("load failed");
   const data = await res.json();
   // Treat an empty array from KV as suspicious — never trust it over local state
@@ -72,7 +66,7 @@ async function apiLoad() {
 
 async function apiSave(people, force = false) {
   if (!people || people.length === 0) return;
-  await fetch("/api/data", {
+  await privateFetch("/api/data", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(force ? { data: people, force: true } : people),
@@ -82,13 +76,13 @@ async function apiSave(people, force = false) {
 
 
 async function apiLoadHistory() {
-  const res = await fetch("/api/history");
+  const res = await privateFetch("/api/history");
   if (!res.ok) return [];
   return await res.json();
 }
 
 async function apiSaveHistory(history) {
-  await fetch("/api/history", {
+  await privateFetch("/api/history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(history),
@@ -481,44 +475,6 @@ function AllPrayedScreen({ prayedCount, praySessionCount, total, onWeek, onKeepP
 }
 
 
-function SetupScreen({ onComplete }) {
-  const [name, setName] = React.useState("");
-  const [sub, setSub] = React.useState("");
-  const [pw, setPw] = React.useState("");
-  const [pw2, setPw2] = React.useState("");
-  const [err, setErr] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-
-  async function submit() {
-    if (!name.trim()) return setErr("Please enter your ministry name.");
-    if (pw.length < 6) return setErr("Password must be at least 6 characters.");
-    if (pw !== pw2) return setErr("Passwords don’t match.");
-    setSaving(true);
-    const data = { name: name.trim(), sub: sub.trim(), password: pw };
-    await apiSaveSettings(data).catch(() => {});
-    onComplete(data);
-  }
-
-  const inp = { width:"100%", boxSizing:"border-box", background:"#2b2322", border:"1px solid #51413e", borderRadius:10, color:"#fff5ec", padding:"12px 14px", fontSize:15, fontFamily:"'Inter', system-ui, sans-serif", outline:"none" };
-  const lbl = { fontSize:11, color:"#b8aaa3", textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600, display:"block", marginBottom:5 };
-
-  return (
-    <div style={{ minHeight:"100vh", background:"#211b1a", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"32px 24px" }}>
-      <img src="/gsm-logo.png" alt="Grace Student Ministry" style={{ width:240, maxWidth:"100%", height:"auto", marginBottom:16 }} />
-      <h1 style={{ fontFamily:"'Lora', Georgia, serif", fontSize:28, fontWeight:600, color:"#fff5ec", margin:"0 0 6px", textAlign:"center" }}>GSM Pray</h1>
-      <p style={{ fontSize:13, color:"#b8aaa3", margin:"0 0 32px", textAlign:"center" }}>Admin setup — only needs to be done once</p>
-      <div style={{ width:"100%", maxWidth:360, display:"flex", flexDirection:"column", gap:12 }}>
-        <div><label style={lbl}>Ministry Name</label><input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. First Baptist Students" style={inp} /></div>
-        <div><label style={lbl}>Subtitle <span style={{ opacity:0.5, fontWeight:400, textTransform:"none" }}>(optional)</span></label><input value={sub} onChange={e => setSub(e.target.value)} placeholder='e.g. "Let’s Pray"' style={inp} /></div>
-        <div><label style={lbl}>Admin Password</label><input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Choose a password (6+ characters)" style={inp} /></div>
-        <div><label style={lbl}>Confirm Password</label><input type="password" value={pw2} onChange={e => setPw2(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Re-enter password" style={inp} /></div>
-        {err && <p style={{ color:"#c07070", fontSize:13, margin:0 }}>{err}</p>}
-        <button onClick={submit} disabled={saving} style={{ background:"#ff751f", border:"none", color:C.bg, borderRadius:12, padding:"14px 0", fontSize:15, fontWeight:600, cursor:"pointer", fontFamily:"'Inter', system-ui, sans-serif", marginTop:4, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Get Started"}</button>
-      </div>
-    </div>
-  );
-}
-
 function LoadingScreen() {
   return (
     <div style={{ minHeight:"100vh", background:"#211b1a", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -542,24 +498,36 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
-  const [settings, setSettings] = React.useState(null);
-  const [settingsLoaded, setSettingsLoaded] = React.useState(false);
-
+  const [session, setSession] = React.useState(null);
+  const [status, setStatus] = React.useState("loading");
+  const [saveError, setSaveError] = React.useState("");
   React.useEffect(() => {
-    apiLoadSettings().then(s => {
-      setSettings(s || false);
-      setSettingsLoaded(true);
-    });
+    clearLegacyPrivateData();
+    const expire = () => { clearLegacyPrivateData(); setSession(null); setStatus("locked"); };
+    const failedSave = () => setSaveError("Your changes could not be saved. Please check your connection and retry.");
+    window.addEventListener("gsm-access-expired", expire);
+    window.addEventListener("gsm-save-failed", failedSave);
+    Promise.all([privateFetch("/api/session").then(r => r.json()), apiLoadSettings()])
+      .then(([user, settings]) => { setSession({ user, settings }); setStatus("ready"); })
+      .catch(() => setStatus("locked"));
+    return () => { window.removeEventListener("gsm-access-expired", expire); window.removeEventListener("gsm-save-failed", failedSave); };
   }, []);
-
-  if (!settingsLoaded) return <LoadingScreen />;
-  if (!settings) return <SetupScreen onComplete={s => setSettings(s)} />;
-  return <AppMain settings={settings} />;
+  if (status === "loading") return <LoadingScreen />;
+  if (!session) return (
+    <div style={{ ...S.root, alignItems:"center", justifyContent:"center", gap:20, paddingLeft:24, paddingRight:24, textAlign:"center" }}>
+      <img src="/gsm-logo.png" alt="Grace Student Ministry" style={{width:240,maxWidth:"100%"}} />
+      <h1>Private leader access</h1>
+      <p>Sign in with an approved leader email to view student information and prayer requests. If you cannot sign in, contact your ministry administrator.</p>
+      <a href="/cdn-cgi/access/logout" style={{...S.confirmBtn,textDecoration:"none"}}>Sign in again</a>
+    </div>
+  );
+  return <>
+    {saveError && <div role="alert" style={{background:"#6b2828",color:"white",padding:12,textAlign:"center"}}>{saveError} <button onClick={() => { setSaveError(""); window.dispatchEvent(new Event("gsm-retry-save")); }}>Retry saving</button></div>}
+    <AppMain key={session.user.email} settings={session.settings} user={session.user} />
+  </>;
 }
 
-function AppMain({ settings }) {
-  const ADMIN_PASSWORD = settings.password;
-
+function AppMain({ settings, user }) {
   const [people, setPeople] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("pray");
@@ -605,9 +573,8 @@ function AppMain({ settings }) {
   const isSaving = useRef(false);
 
   // Admin auth
-  const [adminAuthed, setAdminAuthedState] = useState(() => isAdminAuthed());
+  const [adminAuthed, setAdminAuthedState] = useState(user.isAdmin);
   const [showAdminPrompt, setShowAdminPrompt] = useState(false);
-  const [adminPwInput, setAdminPwInput] = useState("");
   const [adminPwError, setAdminPwError] = useState("");
   const [pendingView, setPendingView] = useState(null);
 
@@ -646,7 +613,7 @@ function AppMain({ settings }) {
           ? new Date(history[0].weekStart).toLocaleDateString("en-US", { timeZone: "America/New_York" })
           : null;
 
-        if (lastSnapshotDate !== currentWeekDate) {
+        if (user.isAdmin && lastSnapshotDate !== currentWeekDate) {
           const prevWeekStart = currentWeekStart - 7 * 24 * 60 * 60 * 1000;
           const prevWeekDateStr = getPrevWeekDateStringET();
           // Use date string comparison — immune to timestamp precision issues
@@ -695,20 +662,38 @@ function AppMain({ settings }) {
       const snapshot = JSON.stringify(people);
       if (snapshot === lastSaved.current) { pendingChange.current = false; return; }
       isSaving.current = true;
-      await apiSave(people).catch(() => {});
-      lastSaved.current = snapshot;
-      isSaving.current = false;
-      pendingChange.current = false;
+      try {
+        await apiSave(people);
+        lastSaved.current = snapshot;
+        pendingChange.current = false;
+      } catch (_e) {
+        window.dispatchEvent(new Event("gsm-save-failed"));
+      } finally { isSaving.current = false; }
     }, 500);
     return () => clearTimeout(saveTimer.current);
   }, [people, loaded]);
+
+  useEffect(() => {
+    const retry = async () => {
+      if (isSaving.current || !pendingChange.current) return;
+      isSaving.current = true;
+      try {
+        await apiSave(people);
+        lastSaved.current = JSON.stringify(people);
+        pendingChange.current = false;
+      } catch (_e) { window.dispatchEvent(new Event("gsm-save-failed")); }
+      finally { isSaving.current = false; }
+    };
+    window.addEventListener("gsm-retry-save", retry);
+    return () => window.removeEventListener("gsm-retry-save", retry);
+  }, [people]);
 
   // Poll for remote changes every 15s — skip entirely if user has unsaved changes
   useEffect(() => {
     if (!loaded) return;
     const poll = async () => {
       // Skip poll if user is actively making changes or a save is in flight
-      if (isSaving.current || pendingChange.current) return;
+      if (document.hidden || isSaving.current || pendingChange.current) return;
       try {
         const fresh = await apiLoad();
         if (fresh.length === 0) return;
@@ -1061,7 +1046,6 @@ function AppMain({ settings }) {
   function handleTabClick(v) {
     if ((v === "people" || v === "import") && !adminAuthed) {
       setPendingView(v);
-      setAdminPwInput("");
       setAdminPwError("");
       setShowAdminPrompt(true);
     } else {
@@ -1097,15 +1081,11 @@ function AppMain({ settings }) {
   }
 
   function submitAdminPw() {
-    if (adminPwInput === ADMIN_PASSWORD) {
-      setAdminAuthed(true);
+    if (user.isAdmin) {
       setAdminAuthedState(true);
       setShowAdminPrompt(false);
       if (pendingView) { setView(pendingView); setPendingView(null); }
-    } else {
-      setAdminPwError("Incorrect password.");
-      setAdminPwInput("");
-    }
+    } else setAdminPwError("Your account does not have admin permissions.");
   }
 
   if (!loaded) {
@@ -1150,15 +1130,7 @@ function AppMain({ settings }) {
         <div style={S.modalOverlay} onClick={() => setShowAdminPrompt(false)}>
           <div style={S.modalBox} onClick={e => e.stopPropagation()}>
             <p style={S.modalTitle}>Admin Access</p>
-            <input
-              autoFocus
-              type="password"
-              value={adminPwInput}
-              onChange={e => setAdminPwInput(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") submitAdminPw(); if (e.key === "Escape") setShowAdminPrompt(false); }}
-              placeholder="Password"
-              style={S.modalInput}
-            />
+            <p style={{color:C.muted}}>Administrator access is tied to your signed-in email.</p>
             {adminPwError && <p style={S.modalError}>{adminPwError}</p>}
             <div style={S.modalBtns}>
               <button onClick={submitAdminPw} style={S.confirmBtn}>Unlock</button>
@@ -1856,10 +1828,11 @@ function AppMain({ settings }) {
         </div>
       )}
       {/* Admin footer link */}
-      <div style={S.adminFooter}>
+      <div style={{...S.adminFooter,gap:20}}>
+        <a href="/cdn-cgi/access/logout" onClick={clearLegacyPrivateData} style={S.adminLink}>sign out</a>
         {adminAuthed
-          ? <button onClick={() => { setAdminAuthedState(false); localStorage.removeItem(ADMIN_KEY); setView("pray"); }} style={S.adminLink}>lock admin</button>
-          : <button onClick={() => { setAdminPwInput(""); setAdminPwError(""); setShowAdminPrompt(true); }} style={S.adminLink}>admin</button>
+          ? <button onClick={() => { setAdminAuthedState(false);  setView("pray"); }} style={S.adminLink}>lock admin</button>
+          : user.isAdmin && <button onClick={() => { setAdminPwError(""); setShowAdminPrompt(true); }} style={S.adminLink}>admin</button>
         }
       </div>
     </div>
